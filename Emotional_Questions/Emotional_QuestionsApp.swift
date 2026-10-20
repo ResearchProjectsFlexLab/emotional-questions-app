@@ -17,6 +17,7 @@ struct Emotional_QuestionsApp: App {
             ContentView()
                 .environment(appModel)
         }
+        .defaultSize(width: 1100, height: 740)
 
         ImmersiveSpace(id: appModel.immersiveSpaceID) {
             ImmersiveView()

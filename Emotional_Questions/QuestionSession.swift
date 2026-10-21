@@ -41,6 +41,7 @@ final class QuestionSession {
         guard phase == .ready, !questions.isEmpty else { return }
         index = 0
         phase = .playing
+        QuestionLogger.roundStarted(questionCount: questions.count)
         reveal(at: date)
     }
 
@@ -107,6 +108,7 @@ final class QuestionSession {
         phase = .finished
         deadline = nil
         secondsRemaining = 0
+        QuestionLogger.roundFinished(questionCount: entries.count)
     }
 }
 

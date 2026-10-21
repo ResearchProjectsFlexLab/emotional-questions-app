@@ -128,10 +128,9 @@ struct QuestionLogEntry: Identifiable, Equatable {
 enum QuestionLogFormat {
     static func text(entries: [QuestionLogEntry], generatedAt: Date) -> String {
         var lines = [
-            "Emotional Questions log",
+            "Emotional Questions",
             "Generated: \(stamp(generatedAt))",
-            "Entries: \(entries.count)",
-            "A line is written each time a question appears.",
+            "Questions: \(entries.count)",
             "",
         ]
 
@@ -154,13 +153,21 @@ enum QuestionLogFormat {
 enum QuestionLogger {
     private static let logger = Logger(subsystem: "FlexLab.Emotional-Questions", category: "QuestionLog")
 
+    static func roundStarted(questionCount: Int) {
+        logger.info("Round started | \(questionCount, privacy: .public) questions")
+    }
+
     static func appeared(_ entry: QuestionLogEntry) {
         let number = entry.number
         let tier = entry.tier
         let difficulty = entry.difficulty
         let prompt = entry.prompt
         logger.info(
-            "New question \(number, privacy: .public) appeared | \(tier, privacy: .public) | difficulty \(difficulty, privacy: .public) | \(prompt, privacy: .public)"
+            "Question \(number, privacy: .public) appeared | \(tier, privacy: .public) | difficulty \(difficulty, privacy: .public) | \(prompt, privacy: .public)"
         )
+    }
+
+    static func roundFinished(questionCount: Int) {
+        logger.info("Round finished | \(questionCount, privacy: .public) questions")
     }
 }

@@ -90,7 +90,7 @@ struct Emotional_QuestionsTests {
         let generated = Date(timeIntervalSince1970: 1_700_000_100)
         let text = session.logText(generatedAt: generated)
 
-        #expect(text.contains("Entries: 2"))
+        #expect(text.contains("Questions: 2"))
         #expect(text.contains("Question 1"))
         #expect(text.contains("First prompt"))
         #expect(text.contains("Question 2"))

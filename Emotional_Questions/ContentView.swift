@@ -20,14 +20,34 @@ struct ContentView: View {
 
     var body: some View {
         NavigationStack {
-            ViewThatFits(in: .horizontal) {
-                panel(sideBySide: true)
-                panel(sideBySide: false)
+            ZStack {
+                RadialGradient(
+                    colors: [StageStyle.accent.opacity(0.20), .clear],
+                    center: .top,
+                    startRadius: 10,
+                    endRadius: 460
+                )
+                .ignoresSafeArea()
+
+                VStack(spacing: 18) {
+                    stage
+                    exportStatusText
+                }
+                .padding(.horizontal, 40)
+                .padding(.vertical, 28)
+                .frame(maxWidth: 620)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .padding(28)
-            .frame(minWidth: 820, minHeight: 560)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .frame(minWidth: 640, minHeight: 560)
             .navigationTitle("Emotional Questions")
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button(action: beginExport) {
+                        Label("Save", systemImage: "square.and.arrow.down")
+                    }
+                    .disabled(session.entries.isEmpty)
+                }
+            }
         }
         .onReceive(clock) { date in
             session.refresh(at: date)
@@ -36,11 +56,11 @@ struct ContentView: View {
             isPresented: $isExporting,
             document: LogFile(text: exportText),
             contentType: .plainText,
-            defaultFilename: "emotional-question-log"
+            defaultFilename: "emotional-questions"
         ) { result in
             switch result {
             case .success:
-                exportStatus = "Log saved."
+                exportStatus = "Saved."
             case .failure(let error):
                 let nsError = error as NSError
                 if nsError.domain == NSCocoaErrorDomain && nsError.code == CocoaError.userCancelled.rawValue {
@@ -52,69 +72,68 @@ struct ContentView: View {
         }
     }
 
-    private func panel(sideBySide: Bool) -> some View {
-        let stack = sideBySide
-            ? AnyLayout(HStackLayout(alignment: .top, spacing: 28))
-            : AnyLayout(VStackLayout(alignment: .leading, spacing: 24))
-
-        return stack {
-            stage
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-
-            logPanel
-                .frame(maxWidth: sideBySide ? 340 : .infinity, maxHeight: sideBySide ? .infinity : 300)
-        }
-    }
-
     private var stage: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            progressHeader
+        VStack(spacing: 32) {
+            Spacer(minLength: 0)
 
-            switch session.phase {
-            case .ready:
-                readyStage
-            case .playing:
-                playingStage
-            case .finished:
-                finishedStage
+            RoundProgress(
+                count: session.questions.count,
+                phase: session.phase,
+                index: session.index
+            )
+
+            Group {
+                switch session.phase {
+                case .ready:
+                    readyStage
+                case .playing:
+                    playingStage
+                case .finished:
+                    finishedStage
+                }
             }
+            .frame(maxWidth: .infinity)
 
             Spacer(minLength: 0)
         }
-    }
-
-    private var progressHeader: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Emotional Gauntlet")
-                    .font(.title2.weight(.semibold))
-                Spacer()
-                Text("\(session.entries.count) of \(session.questions.count) logged")
-                    .font(.subheadline.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
-            ProgressView(
-                value: Double(session.entries.count),
-                total: Double(max(session.questions.count, 1))
-            )
-            .accessibilityLabel("Questions logged")
-        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var readyStage: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("\(session.questions.count) questions. Twenty seconds each. Every question is harder than the last.")
-                .font(.title3)
-                .fixedSize(horizontal: false, vertical: true)
-            Text("Answer out loud. When a question appears, it is written to the session log.")
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+        VStack(spacing: 28) {
+            Image(systemName: "quote.opening")
+                .font(.system(size: 26, weight: .medium))
+                .foregroundStyle(StageStyle.accent)
+                .frame(width: 72, height: 72)
+                .background(StageStyle.accent.opacity(0.14), in: Circle())
+
+            VStack(spacing: 10) {
+                Text("\(session.questions.count) questions, each one harder than the last.")
+                    .font(.system(size: 32, weight: .medium, design: .serif))
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("Answer out loud. You have twenty seconds for each one.")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+
+            HStack(spacing: 0) {
+                stat(value: "\(session.questions.count)", caption: "Questions")
+                statDivider
+                stat(value: "20s", caption: "Each")
+                statDivider
+                stat(value: "1–\(session.questions.count)", caption: "Difficulty")
+            }
+            .padding(.vertical, 6)
+
             Button(action: { session.start() }) {
                 Label("Start round", systemImage: "play.fill")
+                    .frame(minWidth: 220)
             }
             .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .padding(.top, 8)
+            .buttonBorderShape(.capsule)
+            .controlSize(.extraLarge)
         }
     }
 
@@ -122,180 +141,116 @@ struct ContentView: View {
     private var playingStage: some View {
         if let question = session.current {
             let seconds = session.secondsRemaining
-            VStack(alignment: .leading, spacing: 22) {
-                HStack(alignment: .center, spacing: 24) {
-                    TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
-                        CountdownRing(
-                            fraction: session.fractionRemaining(at: timeline.date),
-                            seconds: seconds,
-                            urgent: seconds <= 5
-                        )
-                    }
+            VStack(spacing: 26) {
+                TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+                    CountdownRing(
+                        fraction: session.fractionRemaining(at: timeline.date),
+                        seconds: seconds,
+                        urgent: seconds <= 5
+                    )
+                }
 
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Question \(session.index + 1) of \(session.questions.count)")
+                VStack(spacing: 10) {
+                    Text("Question \(session.index + 1) of \(session.questions.count)")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.secondary)
+                    HStack(spacing: 10) {
+                        DifficultyMeter(current: question.tier)
+                        Text(question.tier.title)
                             .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                        tierPips(current: question.tier)
-                        Text("\(question.tier.title) · difficulty \(question.difficulty)")
-                            .font(.headline)
                     }
-                    Spacer(minLength: 0)
                 }
 
                 Text(question.prompt)
-                    .font(.title2)
+                    .font(.system(size: 34, weight: .medium, design: .serif))
+                    .multilineTextAlignment(.center)
+                    .lineSpacing(4)
                     .fixedSize(horizontal: false, vertical: true)
-
-                if let latest = session.entries.last {
-                    Label(
-                        "Logged question \(latest.number) at \(latest.appearedAt.formatted(date: .omitted, time: .standard))",
-                        systemImage: "text.badge.checkmark"
-                    )
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                }
+                    .frame(maxWidth: .infinity, minHeight: 96, alignment: .center)
+                    .id(session.index)
+                    .transition(.opacity)
 
                 Button(action: { session.advance() }) {
                     Label(
                         session.isLastQuestion ? "Finish" : "Next question",
                         systemImage: session.isLastQuestion ? "flag.checkered" : "forward.fill"
                     )
+                    .frame(minWidth: 220)
                 }
                 .buttonStyle(.borderedProminent)
-                .controlSize(.large)
+                .buttonBorderShape(.capsule)
+                .controlSize(.extraLarge)
             }
+            .animation(.smooth(duration: 0.35), value: session.index)
         }
     }
 
     private var finishedStage: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Round complete")
-                .font(.title.weight(.semibold))
-            Text("\(session.entries.count) questions appeared, and each one is in the log. Save it before you start a new round.")
-                .font(.title3)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+        VStack(spacing: 26) {
+            Image(systemName: "checkmark")
+                .font(.system(size: 28, weight: .semibold))
+                .foregroundStyle(StageStyle.accent)
+                .frame(width: 72, height: 72)
+                .background(StageStyle.accent.opacity(0.14), in: Circle())
+
+            VStack(spacing: 10) {
+                Text("Round complete")
+                    .font(.system(size: 36, weight: .medium, design: .serif))
+                Text("\(session.entries.count) questions. Save a copy, or start a new round.")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             HStack(spacing: 12) {
                 Button(action: beginExport) {
-                    Label("Download log", systemImage: "arrow.down.doc")
+                    Label("Save", systemImage: "square.and.arrow.down")
+                        .frame(minWidth: 140)
                 }
                 .buttonStyle(.borderedProminent)
-                .controlSize(.large)
+                .buttonBorderShape(.capsule)
+                .controlSize(.extraLarge)
                 .disabled(session.entries.isEmpty)
 
                 Button(action: startOver) {
                     Label("New round", systemImage: "arrow.counterclockwise")
+                        .frame(minWidth: 140)
                 }
                 .buttonStyle(.bordered)
-                .controlSize(.large)
+                .buttonBorderShape(.capsule)
+                .controlSize(.extraLarge)
             }
-            exportStatusText
         }
     }
 
-    private var logPanel: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Session log")
-                    .font(.headline)
-                Spacer()
-                Text("\(session.entries.count)")
-                    .font(.subheadline.monospacedDigit().weight(.semibold))
-                    .foregroundStyle(.secondary)
-            }
-
-            Text("Written each time a question appears.")
+    private func stat(value: String, caption: String) -> some View {
+        VStack(spacing: 4) {
+            Text(value)
+                .font(.system(size: 26, weight: .medium, design: .rounded))
+                .monospacedDigit()
+            Text(caption)
                 .font(.caption)
                 .foregroundStyle(.secondary)
-
-            Button(action: beginExport) {
-                Label("Download log", systemImage: "arrow.down.doc")
-            }
-            .disabled(session.entries.isEmpty)
-
-            exportStatusText
-
-            Divider()
-
-            if session.entries.isEmpty {
-                Text("The first question will show up here as soon as the round starts.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 0)
-            } else {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 0) {
-                            ForEach(session.entries) { entry in
-                                logRow(entry)
-                                    .id(entry.id)
-                                if entry.id != session.entries.last?.id {
-                                    Divider()
-                                }
-                            }
-                        }
-                    }
-                    .onChange(of: session.entries.count) { _, _ in
-                        guard let id = session.entries.last?.id else { return }
-                        withAnimation(.snappy) {
-                            proxy.scrollTo(id, anchor: .bottom)
-                        }
-                    }
-                }
-            }
         }
-        .padding(18)
-        .frame(maxHeight: .infinity, alignment: .topLeading)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .frame(maxWidth: .infinity)
     }
 
-    private func logRow(_ entry: QuestionLogEntry) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Q\(entry.number)")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(Color.accentColor)
-                Text(entry.tier)
-                    .font(.caption.weight(.semibold))
-                Spacer()
-                Text(entry.appearedAt.formatted(date: .omitted, time: .standard))
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
-            Text(entry.prompt)
-                .font(.callout)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(.vertical, 8)
-        .accessibilityElement(children: .combine)
-    }
-
-    private func tierPips(current: Difficulty) -> some View {
-        HStack(spacing: 6) {
-            ForEach(Difficulty.allCases, id: \.self) { tier in
-                Text(tier.title)
-                    .font(.caption2.weight(.semibold))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 5)
-                    .foregroundStyle(tier == current ? Color.primary : Color.secondary)
-                    .background(
-                        tier == current
-                            ? Color.accentColor.opacity(0.22)
-                            : Color.primary.opacity(tier < current ? 0.08 : 0.04),
-                        in: Capsule()
-                    )
-            }
-        }
+    private var statDivider: some View {
+        Rectangle()
+            .fill(Color.primary.opacity(0.12))
+            .frame(width: 1, height: 36)
     }
 
     @ViewBuilder
     private var exportStatusText: some View {
         if let exportStatus {
             Text(exportStatus)
-                .font(.caption)
+                .font(.caption.weight(.medium))
                 .foregroundStyle(.secondary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(.ultraThinMaterial, in: Capsule())
         }
     }
 
@@ -311,34 +266,115 @@ struct ContentView: View {
     }
 }
 
+private enum StageStyle {
+    static let accent = Color(red: 0.33, green: 0.42, blue: 0.96)
+    static let urgent = Color(red: 0.92, green: 0.42, blue: 0.28)
+}
+
+private struct RoundProgress: View {
+    var count: Int
+    var phase: QuestionSession.Phase
+    var index: Int
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(0..<count, id: \.self) { item in
+                Capsule()
+                    .fill(fill(for: item))
+                    .frame(width: width(for: item), height: 8)
+            }
+        }
+        .animation(.snappy(duration: 0.35), value: index)
+        .animation(.snappy(duration: 0.35), value: phase)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label)
+    }
+
+    private var label: String {
+        switch phase {
+        case .ready:
+            "Ready to start, \(count) questions"
+        case .playing:
+            "Question \(index + 1) of \(count)"
+        case .finished:
+            "Round complete, \(count) questions"
+        }
+    }
+
+    private func fill(for item: Int) -> Color {
+        switch phase {
+        case .ready:
+            Color.primary.opacity(0.28)
+        case .finished:
+            StageStyle.accent
+        case .playing where item < index:
+            StageStyle.accent.opacity(0.55)
+        case .playing where item == index:
+            StageStyle.accent
+        default:
+            Color.primary.opacity(0.22)
+        }
+    }
+
+    private func width(for item: Int) -> CGFloat {
+        phase == .playing && item == index ? 26 : 14
+    }
+}
+
+private struct DifficultyMeter: View {
+    var current: Difficulty
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(Difficulty.allCases, id: \.self) { tier in
+                Capsule()
+                    .fill(tier <= current ? StageStyle.accent : Color.primary.opacity(0.14))
+                    .frame(width: tier == current ? 18 : 8, height: 6)
+            }
+        }
+        .accessibilityLabel("\(current.title), difficulty \(current.rawValue) of \(Difficulty.allCases.count)")
+    }
+}
+
 private struct CountdownRing: View {
     var fraction: Double
     var seconds: Int
     var urgent: Bool
 
+    private var ink: Color {
+        urgent ? StageStyle.urgent : StageStyle.accent
+    }
+
     var body: some View {
         ZStack {
             Circle()
-                .stroke(Color.primary.opacity(0.08), lineWidth: 12)
+                .fill(ink.opacity(0.08))
+                .padding(16)
+
+            Circle()
+                .stroke(Color.primary.opacity(0.08), lineWidth: 8)
+
             Circle()
                 .trim(from: 0, to: max(0, min(1, fraction)))
-                .stroke(
-                    urgent ? Color.orange : Color.accentColor,
-                    style: StrokeStyle(lineWidth: 12, lineCap: .round)
-                )
+                .stroke(ink, style: StrokeStyle(lineWidth: 8, lineCap: .round))
                 .rotationEffect(.degrees(-90))
+                .shadow(color: ink.opacity(0.35), radius: 6, y: 1)
+
             VStack(spacing: 0) {
                 Text("\(seconds)")
-                    .font(.system(size: 48, weight: .semibold, design: .rounded))
+                    .font(.system(size: 46, weight: .medium, design: .rounded))
                     .monospacedDigit()
+                    .foregroundStyle(urgent ? ink : Color.primary)
                     .contentTransition(.numericText(countsDown: true))
                     .animation(.snappy, value: seconds)
                 Text("sec")
-                    .font(.caption.weight(.semibold))
+                    .font(.caption2.weight(.semibold))
                     .foregroundStyle(.secondary)
+                    .textCase(.uppercase)
+                    .tracking(1.1)
             }
         }
-        .frame(width: 140, height: 140)
+        .frame(width: 132, height: 132)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(seconds) seconds remaining")
     }

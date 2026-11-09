@@ -12,10 +12,15 @@ import SwiftUI
 @Observable
 class AppModel {
     let immersiveSpaceID = "ImmersiveSpace"
+    let mainWindowID = "Main"
+    /// True while the main window is put away during a session in the room.
+    var mainWindowHidden = false
     enum ImmersiveSpaceState {
         case closed
         case inTransition
         case open
     }
     var immersiveSpaceState = ImmersiveSpaceState.closed
+    /// Shared so both the question window and the interview room react to it.
+    var session = QuestionSession()
 }

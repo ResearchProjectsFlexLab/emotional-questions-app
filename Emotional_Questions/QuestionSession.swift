@@ -5,27 +5,45 @@
 
 import Foundation
 import SwiftUI
-import UniformTypeIdentifiers
 
 @Observable
 final class QuestionSession {
     enum Phase: Equatable {
-        case ready
-        case playing
-        case finished
+        case ready       // before Start is pressed
+        case countdown   // Start pressed, logging on, 3-2-1 before the first question
+        case playing     // questions on screen
+        case finished    // Stop pressed (or round done), logging closed, log saved
     }
 
     static let secondsPerQuestion = 20
+    static let countdownSeconds = 3
 
     let questions: [InterviewQuestion]
     private(set) var phase: Phase = .ready
     private(set) var index = 0
     private(set) var secondsRemaining = secondsPerQuestion
+    private(set) var countdownValue = 0
+    /// Every question that appeared, in order.
     private(set) var entries: [QuestionLogEntry] = []
-    private var deadline: Date?
+    /// Every line written to the log (session start/stop, questions, skips, time-ups).
+    private(set) var log: [LogLine] = []
+    private(set) var sessionStartDate: Date?
+    private(set) var sessionEndDate: Date?
+    /// Where the log was written when the session stopped (Files › On My Apple Vision Pro › Emotional_Questions).
+    private(set) var savedLogURL: URL?
+    private(set) var saveError: String?
 
-    init(questions: [InterviewQuestion] = QuestionBank.all) {
+    /// True from the moment Start is pressed until Stop is pressed — i.e. while logging is on.
+    var isRunning: Bool { phase == .countdown || phase == .playing }
+
+    private let logDirectory: URL?
+    private var deadline: Date?
+    private var questionShownAt: Date?
+
+    /// `logDirectory` defaults to the app's Documents folder, which the Files app shows.
+    init(questions: [InterviewQuestion] = QuestionBank.all, logDirectory: URL? = nil) {
         self.questions = questions
+        self.logDirectory = logDirectory
     }
 
     var current: InterviewQuestion? {
@@ -37,30 +55,76 @@ final class QuestionSession {
         phase == .playing && index == questions.count - 1
     }
 
-    func start(at date: Date = .now) {
-        guard phase == .ready, !questions.isEmpty else { return }
-        index = 0
-        phase = .playing
-        QuestionLogger.roundStarted(questionCount: questions.count)
-        reveal(at: date)
-    }
+    // MARK: - Start / Stop
 
-    func advance(at date: Date = .now) {
-        guard phase == .playing else { return }
-        let next = index + 1
-        guard questions.indices.contains(next) else {
-            finish()
+    /// Starts logging immediately, then shows a countdown before the first question.
+    /// Pass `countdown: 0` to show the first question right away.
+    func start(at date: Date = .now, countdown: Int = countdownSeconds) {
+        guard !isRunning, !questions.isEmpty else { return }
+        index = 0
+        entries = []
+        log = []
+        sessionStartDate = date
+        sessionEndDate = nil
+        savedLogURL = nil
+        saveError = nil
+        questionShownAt = nil
+        secondsRemaining = Self.secondsPerQuestion
+
+        addLog("SESSION START — \(questions.count) questions, \(Self.secondsPerQuestion)s each", at: date)
+        QuestionLogger.roundStarted(questionCount: questions.count)
+
+        guard countdown > 0 else {
+            beginQuestions(at: date)
             return
         }
-        index = next
-        reveal(at: date)
+        phase = .countdown
+        countdownValue = countdown
+        deadline = date.addingTimeInterval(TimeInterval(countdown))
+    }
+
+    /// Ends the session, closes the log and saves it to Files automatically.
+    func stop(at date: Date = .now) {
+        guard isRunning else { return }
+        end(reason: "stopped", at: date)
+    }
+
+    /// Returns to the welcome screen after a finished session.
+    func restart() {
+        guard !isRunning else { return }
+        phase = .ready
+        index = 0
+        secondsRemaining = Self.secondsPerQuestion
+        countdownValue = 0
+        deadline = nil
+    }
+
+    // MARK: - Questions
+
+    /// The participant pressed Next (or Finish on the last question).
+    func advance(at date: Date = .now) {
+        guard phase == .playing else { return }
+        addLog("NEXT PRESSED [\(index + 1)] — after \(elapsed(at: date))", at: date)
+        moveOn(at: date)
     }
 
     func refresh(at date: Date) {
-        guard phase == .playing, let deadline else { return }
+        guard isRunning, let deadline else { return }
         let remaining = deadline.timeIntervalSince(date)
+
+        if phase == .countdown {
+            if remaining <= 0 {
+                beginQuestions(at: deadline)
+            } else {
+                let shown = max(1, Int(ceil(remaining)))
+                if shown != countdownValue { countdownValue = shown }
+            }
+            return
+        }
+
         if remaining <= 0 {
-            advance(at: date)
+            addLog("TIME UP [\(index + 1)] — \(Self.secondsPerQuestion)s limit reached", at: date)
+            moveOn(at: date)
             return
         }
         let shown = min(Self.secondsPerQuestion, max(1, Int(ceil(remaining))))
@@ -77,20 +141,69 @@ final class QuestionSession {
         return min(1, max(0, remaining / Double(Self.secondsPerQuestion)))
     }
 
-    func restart() {
-        phase = .ready
-        index = 0
-        secondsRemaining = Self.secondsPerQuestion
-        deadline = nil
-        entries = []
+    // MARK: - Log
+
+    var sessionDuration: TimeInterval {
+        guard let sessionStartDate else { return 0 }
+        return (sessionEndDate ?? .now).timeIntervalSince(sessionStartDate)
     }
 
     func logText(generatedAt: Date = .now) -> String {
-        QuestionLogFormat.text(entries: entries, generatedAt: generatedAt)
+        QuestionLogFormat.text(lines: log, questionsShown: entries.count, generatedAt: generatedAt)
+    }
+
+    var suggestedLogFilename: String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+        return "emotional-log_\(f.string(from: sessionStartDate ?? .now))"
+    }
+
+    /// Writes the log into the app's Documents folder, which the Files app shows,
+    /// so nothing is asked of the participant after Stop.
+    func saveLogToFiles() {
+        do {
+            let folder = try logDirectory ?? FileManager.default.url(
+                for: .documentDirectory, in: .userDomainMask,
+                appropriateFor: nil, create: true
+            )
+            var url = folder.appendingPathComponent(suggestedLogFilename).appendingPathExtension("txt")
+            var n = 2
+            while FileManager.default.fileExists(atPath: url.path) {
+                url = folder.appendingPathComponent("\(suggestedLogFilename)-\(n)").appendingPathExtension("txt")
+                n += 1
+            }
+            try logText().write(to: url, atomically: true, encoding: .utf8)
+            savedLogURL = url
+            saveError = nil
+        } catch {
+            savedLogURL = nil
+            saveError = error.localizedDescription
+        }
+    }
+
+    // MARK: - Helpers
+
+    private func beginQuestions(at date: Date) {
+        phase = .playing
+        countdownValue = 0
+        index = 0
+        reveal(at: date)
+    }
+
+    private func moveOn(at date: Date) {
+        let next = index + 1
+        guard questions.indices.contains(next) else {
+            end(reason: "round complete", at: date)
+            return
+        }
+        index = next
+        reveal(at: date)
     }
 
     private func reveal(at date: Date) {
         deadline = date.addingTimeInterval(TimeInterval(Self.secondsPerQuestion))
+        questionShownAt = date
         secondsRemaining = Self.secondsPerQuestion
         let question = questions[index]
         let entry = QuestionLogEntry(
@@ -101,35 +214,30 @@ final class QuestionSession {
             prompt: question.prompt
         )
         entries.append(entry)
+        addLog("NEW QUESTION [\(entry.number)] — \(entry.tier) | difficulty \(entry.difficulty) | \(entry.prompt)", at: date)
         QuestionLogger.appeared(entry)
     }
 
-    private func finish() {
+    private func end(reason: String, at date: Date) {
         phase = .finished
         deadline = nil
         secondsRemaining = 0
+        countdownValue = 0
+        sessionEndDate = date
+        addLog(String(
+            format: "SESSION STOP — %@ | questions shown: %d of %d | duration: %.0fs",
+            reason, entries.count, questions.count, sessionDuration
+        ), at: date)
         QuestionLogger.roundFinished(questionCount: entries.count)
-    }
-}
-
-nonisolated struct LogFile: FileDocument {
-    static var readableContentTypes: [UTType] { [.plainText] }
-
-    var text: String
-
-    init(text: String) {
-        self.text = text
+        saveLogToFiles()
     }
 
-    init(configuration: ReadConfiguration) throws {
-        guard let data = configuration.file.regularFileContents,
-              let text = String(data: data, encoding: .utf8) else {
-            throw CocoaError(.fileReadCorruptFile)
-        }
-        self.text = text
+    private func elapsed(at date: Date) -> String {
+        guard let questionShownAt else { return "0.0s" }
+        return String(format: "%.1fs", date.timeIntervalSince(questionShownAt))
     }
 
-    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
-        FileWrapper(regularFileWithContents: Data(text.utf8))
+    private func addLog(_ message: String, at date: Date) {
+        log.append(LogLine(at: date, message: message))
     }
 }

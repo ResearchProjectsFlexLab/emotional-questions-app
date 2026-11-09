@@ -12,6 +12,8 @@ import Testing
 @MainActor
 struct Emotional_QuestionsTests {
 
+    private let start = Date(timeIntervalSince1970: 1_700_000_000)
+
     @Test func questionsGetHarderInOrder() {
         let questions = QuestionBank.all
         #expect(questions.map(\.difficulty) == Array(1...questions.count))
@@ -23,30 +25,48 @@ struct Emotional_QuestionsTests {
         #expect(QuestionSession.secondsPerQuestion == 20)
     }
 
-    @Test func startingLogsTheQuestionThatAppears() {
-        let session = QuestionSession(questions: sampleQuestions())
-        let start = Date(timeIntervalSince1970: 1_700_000_000)
+    @Test func startingLogsSessionStartAndTheQuestionThatAppears() {
+        let session = makeSession()
+        session.start(at: start, countdown: 0)
 
-        session.start(at: start)
-
+        #expect(session.isRunning)
         #expect(session.entries.count == 1)
         #expect(session.entries[0].number == 1)
         #expect(session.entries[0].prompt == "First prompt")
         #expect(session.entries[0].appearedAt == start)
         #expect(session.secondsRemaining == 20)
+        #expect(session.log.first?.message.hasPrefix("SESSION START") == true)
+    }
+
+    @Test func startShowsCountdownWithLoggingOnBeforeFirstQuestion() {
+        let session = makeSession()
+        session.start(at: start)
+
+        #expect(session.phase == .countdown)
+        #expect(session.isRunning)
+        #expect(session.countdownValue == 3)
+        #expect(session.entries.isEmpty)
+        #expect(session.log.count == 1)
+
+        session.refresh(at: start.addingTimeInterval(1.5))
+        #expect(session.countdownValue == 2)
+
+        session.refresh(at: start.addingTimeInterval(3))
+        #expect(session.phase == .playing)
+        #expect(session.entries.count == 1)
+        #expect(session.entries[0].appearedAt == start.addingTimeInterval(3))
     }
 
     @Test func startingTwiceDoesNotLogTwice() {
-        let session = QuestionSession(questions: sampleQuestions())
-        session.start(at: Date(timeIntervalSince1970: 1_700_000_000))
-        session.start(at: Date(timeIntervalSince1970: 1_700_000_001))
+        let session = makeSession()
+        session.start(at: start, countdown: 0)
+        session.start(at: start.addingTimeInterval(1), countdown: 0)
         #expect(session.entries.count == 1)
     }
 
     @Test func timerLogsTheNextQuestionWhenTwentySecondsElapse() {
-        let session = QuestionSession(questions: sampleQuestions())
-        let start = Date(timeIntervalSince1970: 1_700_000_000)
-        session.start(at: start)
+        let session = makeSession()
+        session.start(at: start, countdown: 0)
 
         session.refresh(at: start.addingTimeInterval(19.1))
         #expect(session.entries.count == 1)
@@ -56,6 +76,7 @@ struct Emotional_QuestionsTests {
         #expect(session.entries.count == 2)
         #expect(session.current?.prompt == "Second prompt")
         #expect(session.secondsRemaining == 20)
+        #expect(session.log.contains { $0.message.hasPrefix("TIME UP [1]") })
 
         session.refresh(at: start.addingTimeInterval(21))
         #expect(session.entries.count == 2)
@@ -63,41 +84,97 @@ struct Emotional_QuestionsTests {
     }
 
     @Test func skippingAheadLogsTheNewQuestion() {
-        let session = QuestionSession(questions: sampleQuestions())
-        session.start()
+        let session = makeSession()
+        session.start(countdown: 0)
         session.advance()
         #expect(session.entries.map(\.prompt) == ["First prompt", "Second prompt"])
+        #expect(session.log.contains { $0.message.hasPrefix("NEXT PRESSED [1]") })
     }
 
-    @Test func finishingTheRoundDoesNotLogAnExtraQuestion() {
-        let session = QuestionSession(questions: sampleQuestions())
-        let start = Date(timeIntervalSince1970: 1_700_000_000)
+    @Test func stopEndsSessionAndSavesLogAutomatically() throws {
+        let dir = try tempDirectory()
+        let session = makeSession(logDirectory: dir)
+        session.start(at: start, countdown: 0)
+        session.stop(at: start.addingTimeInterval(7))
+
+        #expect(session.phase == .finished)
+        #expect(!session.isRunning)
+        #expect(session.log.last?.message.hasPrefix("SESSION STOP — stopped") == true)
+
+        let url = try #require(session.savedLogURL)
+        #expect(url.deletingLastPathComponent().standardizedFileURL == dir.standardizedFileURL)
+        let saved = try String(contentsOf: url, encoding: .utf8)
+        #expect(saved.contains("SESSION START"))
+        #expect(saved.contains("First prompt"))
+        #expect(saved.contains("SESSION STOP"))
+        #expect(session.saveError == nil)
+    }
+
+    @Test func stoppingDuringCountdownStillSavesLog() throws {
+        let session = makeSession(logDirectory: try tempDirectory())
         session.start(at: start)
+        session.stop(at: start.addingTimeInterval(1))
+
+        #expect(session.phase == .finished)
+        #expect(session.entries.isEmpty)
+        #expect(session.savedLogURL != nil)
+    }
+
+    @Test func finishingTheRoundSavesLogWithoutAnExtraQuestion() {
+        let session = makeSession()
+        session.start(at: start, countdown: 0)
         session.refresh(at: start.addingTimeInterval(20))
         session.refresh(at: start.addingTimeInterval(40))
 
         #expect(session.phase == .finished)
         #expect(session.entries.count == 2)
         #expect(session.current == nil)
+        #expect(session.log.last?.message.hasPrefix("SESSION STOP — round complete") == true)
+        #expect(session.savedLogURL != nil)
     }
 
-    @Test func downloadedLogContainsEveryQuestionThatAppeared() {
-        let session = QuestionSession(questions: sampleQuestions())
-        let start = Date(timeIntervalSince1970: 1_700_000_000)
-        session.start(at: start)
+    @Test func newRoundAfterStopStartsAFreshLog() {
+        let session = makeSession()
+        session.start(at: start, countdown: 0)
+        session.stop(at: start.addingTimeInterval(2))
+        session.restart()
+        #expect(session.phase == .ready)
+
+        session.start(at: start.addingTimeInterval(10), countdown: 0)
+        #expect(session.entries.count == 1)
+        #expect(session.log.count == 2)
+        #expect(session.savedLogURL == nil)
+    }
+
+    @Test func logTextContainsEveryEvent() {
+        let session = makeSession()
+        session.start(at: start, countdown: 0)
         session.advance(at: start.addingTimeInterval(5))
 
         let generated = Date(timeIntervalSince1970: 1_700_000_100)
         let text = session.logText(generatedAt: generated)
 
-        #expect(text.contains("Questions: 2"))
-        #expect(text.contains("Question 1"))
+        #expect(text.contains("Questions shown: 2"))
+        #expect(text.contains("SESSION START"))
+        #expect(text.contains("NEW QUESTION [1]"))
         #expect(text.contains("First prompt"))
-        #expect(text.contains("Question 2"))
+        #expect(text.contains("NEW QUESTION [2]"))
         #expect(text.contains("Second prompt"))
         #expect(text.contains("Warm-up"))
         #expect(text.contains("Easy"))
         #expect(text.contains(QuestionLogFormat.stamp(generated)))
+    }
+
+    private func makeSession(logDirectory: URL? = nil) -> QuestionSession {
+        let dir = logDirectory ?? (try? tempDirectory())
+        return QuestionSession(questions: sampleQuestions(), logDirectory: dir)
+    }
+
+    private func tempDirectory() throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("emotional-log-tests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
     }
 
     private func sampleQuestions() -> [InterviewQuestion] {

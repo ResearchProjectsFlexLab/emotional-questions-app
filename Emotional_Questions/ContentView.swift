@@ -8,13 +8,14 @@
 import Combine
 import Foundation
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct ContentView: View {
-    @State private var session = QuestionSession()
-    @State private var exportText = ""
-    @State private var isExporting = false
-    @State private var exportStatus: String?
+    @Environment(AppModel.self) private var appModel
+    @Environment(\.openImmersiveSpace)    private var openImmersiveSpace
+    @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
+    @Environment(\.dismissWindow)         private var dismissWindow
+
+    private var session: QuestionSession { appModel.session }
 
     private let clock = Timer.publish(every: 0.1, tolerance: 0.02, on: .main, in: .common).autoconnect()
 
@@ -29,48 +30,69 @@ struct ContentView: View {
                 )
                 .ignoresSafeArea()
 
-                VStack(spacing: 18) {
-                    stage
-                    exportStatusText
-                }
-                .padding(.horizontal, 40)
-                .padding(.vertical, 28)
-                .frame(maxWidth: 620)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                stage
+                    .padding(.horizontal, 40)
+                    .padding(.vertical, 28)
+                    .frame(maxWidth: 620)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .frame(minWidth: 640, minHeight: 560)
+            .frame(minWidth: 560, minHeight: 500)
             .navigationTitle("Emotional Questions")
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Button(action: beginExport) {
-                        Label("Save", systemImage: "square.and.arrow.down")
-                    }
-                    .disabled(session.entries.isEmpty)
-                }
+        }
+        .animation(.easeInOut(duration: 0.35), value: session.phase)
+        // Stop is always reachable while logging is on. One press ends the session and saves the log.
+        .overlay(alignment: .topTrailing) {
+            if session.isRunning {
+                StopControl(onStop: stopSession)
+                    .padding(24)
             }
         }
         .onReceive(clock) { date in
             session.refresh(at: date)
         }
-        .fileExporter(
-            isPresented: $isExporting,
-            document: LogFile(text: exportText),
-            contentType: .plainText,
-            defaultFilename: "emotional-questions"
-        ) { result in
-            switch result {
-            case .success:
-                exportStatus = "Saved."
-            case .failure(let error):
-                let nsError = error as NSError
-                if nsError.domain == NSCocoaErrorDomain && nsError.code == CocoaError.userCancelled.rawValue {
-                    exportStatus = nil
-                } else {
-                    exportStatus = error.localizedDescription
-                }
+        // The round can also end on its own (last question times out or Finish is pressed).
+        .onChange(of: session.phase) { _, phase in
+            if phase == .finished {
+                Task { await leaveTestRoom() }
             }
         }
     }
+
+    // MARK: - Actions
+
+    private func startSession() {
+        session.start()
+        Task { await enterTestRoom() }
+    }
+
+    private func stopSession() {
+        session.stop()   // stops logging and saves the log file automatically
+        Task { await leaveTestRoom() }
+    }
+
+    private func enterTestRoom() async {
+        guard appModel.immersiveSpaceState == .closed else { return }
+        appModel.immersiveSpaceState = .inTransition
+        switch await openImmersiveSpace(id: appModel.immersiveSpaceID) {
+        case .opened:
+            // In the room, the timer panel floats above the interviewer, so this
+            // window steps aside. The room brings it back when the session ends.
+            if session.isRunning {
+                appModel.mainWindowHidden = true
+                dismissWindow(id: appModel.mainWindowID)
+            }
+        default:
+            appModel.immersiveSpaceState = .closed
+        }
+    }
+
+    private func leaveTestRoom() async {
+        guard appModel.immersiveSpaceState == .open else { return }
+        appModel.immersiveSpaceState = .inTransition
+        await dismissImmersiveSpace()
+    }
+
+    // MARK: - Stages
 
     private var stage: some View {
         VStack(spacing: 32) {
@@ -86,6 +108,8 @@ struct ContentView: View {
                 switch session.phase {
                 case .ready:
                     readyStage
+                case .countdown:
+                    countdownStage
                 case .playing:
                     playingStage
                 case .finished:
@@ -93,6 +117,7 @@ struct ContentView: View {
                 }
             }
             .frame(maxWidth: .infinity)
+            .transition(.opacity)
 
             Spacer(minLength: 0)
         }
@@ -127,13 +152,31 @@ struct ContentView: View {
             }
             .padding(.vertical, 6)
 
-            Button(action: { session.start() }) {
-                Label("Start round", systemImage: "play.fill")
-                    .frame(minWidth: 220)
+            Button(action: startSession) {
+                Label("Start", systemImage: "play.fill")
+                    .font(.title.weight(.semibold))
+                    .frame(minWidth: 300, minHeight: 80)
             }
             .buttonStyle(.borderedProminent)
-            .buttonBorderShape(.capsule)
+            .tint(.green)
             .controlSize(.extraLarge)
+        }
+    }
+
+    private var countdownStage: some View {
+        VStack(spacing: 20) {
+            RecordingBadge()
+            Text("Get ready…")
+                .font(.title)
+                .foregroundStyle(.secondary)
+            Text("\(session.countdownValue)")
+                .font(.system(size: 180, weight: .bold, design: .rounded))
+                .monospacedDigit()
+                .contentTransition(.numericText(countsDown: true))
+                .animation(.snappy, value: session.countdownValue)
+            Text("Your first question appears in a moment.")
+                .font(.title3)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -142,6 +185,8 @@ struct ContentView: View {
         if let question = session.current {
             let seconds = session.secondsRemaining
             VStack(spacing: 26) {
+                RecordingBadge()
+
                 TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
                     CountdownRing(
                         fraction: session.fractionRemaining(at: timeline.date),
@@ -161,14 +206,24 @@ struct ContentView: View {
                     }
                 }
 
-                Text(question.prompt)
-                    .font(.system(size: 34, weight: .medium, design: .serif))
-                    .multilineTextAlignment(.center)
-                    .lineSpacing(4)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, minHeight: 96, alignment: .center)
-                    .id(session.index)
-                    .transition(.opacity)
+                // In the interview room the question is spoken in the interviewer's
+                // speech bubble; the window only shows it if the room isn't open.
+                Group {
+                    if appModel.immersiveSpaceState == .open {
+                        Label("The interviewer is asking question \(session.index + 1)", systemImage: "bubble.left.fill")
+                            .font(.title3.weight(.medium))
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text(question.prompt)
+                            .font(.system(size: 34, weight: .medium, design: .serif))
+                            .multilineTextAlignment(.center)
+                            .lineSpacing(4)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .frame(maxWidth: .infinity, minHeight: 96, alignment: .center)
+                .id(session.index)
+                .transition(.opacity)
 
                 Button(action: { session.advance() }) {
                     Label(
@@ -194,33 +249,45 @@ struct ContentView: View {
                 .background(StageStyle.accent.opacity(0.14), in: Circle())
 
             VStack(spacing: 10) {
-                Text("Round complete")
+                Text("Session complete")
                     .font(.system(size: 36, weight: .medium, design: .serif))
-                Text("\(session.entries.count) questions. Save a copy, or start a new round.")
+                Text("\(session.entries.count) of \(session.questions.count) questions shown.")
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            HStack(spacing: 12) {
-                Button(action: beginExport) {
-                    Label("Save", systemImage: "square.and.arrow.down")
-                        .frame(minWidth: 140)
-                }
-                .buttonStyle(.borderedProminent)
-                .buttonBorderShape(.capsule)
-                .controlSize(.extraLarge)
-                .disabled(session.entries.isEmpty)
+            saveBanner
 
-                Button(action: startOver) {
-                    Label("New round", systemImage: "arrow.counterclockwise")
-                        .frame(minWidth: 140)
-                }
-                .buttonStyle(.bordered)
-                .buttonBorderShape(.capsule)
-                .controlSize(.extraLarge)
+            Button(action: { session.restart() }) {
+                Label("New round", systemImage: "arrow.counterclockwise")
+                    .font(.title3.weight(.semibold))
+                    .frame(minWidth: 220, minHeight: 56)
             }
+            .buttonStyle(.borderedProminent)
+            .buttonBorderShape(.capsule)
+        }
+    }
+
+    @ViewBuilder
+    private var saveBanner: some View {
+        if let url = session.savedLogURL {
+            VStack(spacing: 6) {
+                Label("Log downloaded", systemImage: "checkmark.circle.fill")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(.green)
+                Text("Files › On My Apple Vision Pro › Emotional_Questions")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Text(url.lastPathComponent)
+                    .font(.callout.monospaced())
+                    .foregroundStyle(.secondary)
+            }
+        } else if let error = session.saveError {
+            Label("Couldn't save the log: \(error)", systemImage: "xmark.octagon.fill")
+                .font(.headline)
+                .foregroundStyle(.red)
         }
     }
 
@@ -241,32 +308,47 @@ struct ContentView: View {
             .fill(Color.primary.opacity(0.12))
             .frame(width: 1, height: 36)
     }
+}
 
-    @ViewBuilder
-    private var exportStatusText: some View {
-        if let exportStatus {
-            Text(exportStatus)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(.ultraThinMaterial, in: Capsule())
+// MARK: - Start / Stop pieces
+
+struct StopControl: View {
+    let onStop: () -> Void
+
+    var body: some View {
+        Button(action: onStop) {
+            Label("Stop", systemImage: "stop.fill")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.white)
+                .frame(minWidth: 110, minHeight: 48)
         }
-    }
-
-    private func beginExport() {
-        guard !session.entries.isEmpty else { return }
-        exportText = session.logText()
-        isExporting = true
-    }
-
-    private func startOver() {
-        session.restart()
-        exportStatus = nil
+        .buttonStyle(.borderedProminent)
+        .tint(.red)
+        .help("End the session and save the log")
     }
 }
 
-private enum StageStyle {
+struct RecordingBadge: View {
+    @State private var pulse = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(.red)
+                .frame(width: 10, height: 10)
+                .opacity(pulse ? 0.35 : 1)
+                .animation(.easeInOut(duration: 0.8).repeatForever(), value: pulse)
+            Text("Logging")
+                .font(.callout.weight(.semibold))
+        }
+        .padding(.horizontal, 12).padding(.vertical, 6)
+        .background(.red.opacity(0.15), in: Capsule())
+        .onAppear { pulse = true }
+        .accessibilityLabel("Logging is on")
+    }
+}
+
+enum StageStyle {
     static let accent = Color(red: 0.33, green: 0.42, blue: 0.96)
     static let urgent = Color(red: 0.92, green: 0.42, blue: 0.28)
 }
@@ -294,6 +376,8 @@ private struct RoundProgress: View {
         switch phase {
         case .ready:
             "Ready to start, \(count) questions"
+        case .countdown:
+            "Starting, \(count) questions"
         case .playing:
             "Question \(index + 1) of \(count)"
         case .finished:
@@ -303,7 +387,7 @@ private struct RoundProgress: View {
 
     private func fill(for item: Int) -> Color {
         switch phase {
-        case .ready:
+        case .ready, .countdown:
             Color.primary.opacity(0.28)
         case .finished:
             StageStyle.accent
@@ -321,7 +405,7 @@ private struct RoundProgress: View {
     }
 }
 
-private struct DifficultyMeter: View {
+struct DifficultyMeter: View {
     var current: Difficulty
 
     var body: some View {
@@ -336,7 +420,7 @@ private struct DifficultyMeter: View {
     }
 }
 
-private struct CountdownRing: View {
+struct CountdownRing: View {
     var fraction: Double
     var seconds: Int
     var urgent: Bool
@@ -382,4 +466,5 @@ private struct CountdownRing: View {
 
 #Preview(windowStyle: .automatic) {
     ContentView()
+        .environment(AppModel())
 }

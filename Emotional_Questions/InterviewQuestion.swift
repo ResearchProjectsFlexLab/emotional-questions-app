@@ -125,29 +125,37 @@ struct QuestionLogEntry: Identifiable, Equatable {
     let prompt: String
 }
 
+struct LogLine: Equatable {
+    let at: Date
+    let message: String
+}
+
 enum QuestionLogFormat {
-    static func text(entries: [QuestionLogEntry], generatedAt: Date) -> String {
+    static func text(lines log: [LogLine], questionsShown: Int, generatedAt: Date) -> String {
         var lines = [
-            "Emotional Questions",
+            "Emotional Questions log",
             "Generated: \(stamp(generatedAt))",
-            "Questions: \(entries.count)",
+            "Questions shown: \(questionsShown)",
+            "Entries: \(log.count)",
+            "A line is written when the session starts, each time a question appears or is skipped, and when it stops.",
             "",
         ]
 
-        for entry in entries {
-            lines.append(
-                "Question \(entry.number) | \(stamp(entry.appearedAt)) | \(entry.tier) | difficulty \(entry.difficulty)"
-            )
-            lines.append(entry.prompt)
-            lines.append("")
+        for line in log {
+            lines.append("\(stamp(line.at))  \(line.message)")
         }
 
-        return lines.joined(separator: "\n")
+        return lines.joined(separator: "\n") + "\n"
     }
 
-    static func stamp(_ date: Date) -> String {
-        date.formatted(Date.ISO8601FormatStyle(includingFractionalSeconds: false))
-    }
+    static func stamp(_ date: Date) -> String { clock.string(from: date) }
+
+    private static let clock: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
+        return formatter
+    }()
 }
 
 enum QuestionLogger {

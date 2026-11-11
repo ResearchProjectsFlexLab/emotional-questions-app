@@ -23,4 +23,6 @@ class AppModel {
     var immersiveSpaceState = ImmersiveSpaceState.closed
     /// Shared so both the question window and the interview room react to it.
     var session = QuestionSession()
+    /// Reads the interviewer's lines aloud in the room.
+    @ObservationIgnored let interviewerVoice = InterviewerVoice()
 }

@@ -17,12 +17,16 @@ final class QuestionSession {
 
     static let secondsPerQuestion = 20
     static let countdownSeconds = 3
+    /// The whole interview ends after this long, even if questions remain.
+    static let interviewTimeLimit: TimeInterval = 3 * 60
 
     let questions: [InterviewQuestion]
     private(set) var phase: Phase = .ready
     private(set) var index = 0
     private(set) var secondsRemaining = secondsPerQuestion
     private(set) var countdownValue = 0
+    /// Whole seconds left in the interview (counts down from 3:00 once the first question appears).
+    private(set) var interviewSecondsRemaining = Int(interviewTimeLimit)
     /// Every question that appeared, in order.
     private(set) var entries: [QuestionLogEntry] = []
     /// Every line written to the log (session start/stop, questions, skips, time-ups).
@@ -37,13 +41,23 @@ final class QuestionSession {
     var isRunning: Bool { phase == .countdown || phase == .playing }
 
     private let logDirectory: URL?
+    private let timeLimit: TimeInterval
     private var deadline: Date?
+    /// When the interview ends regardless of how many questions are left.
+    private var interviewDeadline: Date?
     private var questionShownAt: Date?
 
     /// `logDirectory` defaults to the app's Documents folder, which the Files app shows.
-    init(questions: [InterviewQuestion] = QuestionBank.all, logDirectory: URL? = nil) {
+    /// `timeLimit` is the total interview length; the default is 3 minutes.
+    init(
+        questions: [InterviewQuestion] = QuestionBank.all,
+        logDirectory: URL? = nil,
+        timeLimit: TimeInterval = interviewTimeLimit
+    ) {
         self.questions = questions
         self.logDirectory = logDirectory
+        self.timeLimit = timeLimit
+        self.interviewSecondsRemaining = Int(timeLimit)
     }
 
     var current: InterviewQuestion? {
@@ -70,8 +84,13 @@ final class QuestionSession {
         saveError = nil
         questionShownAt = nil
         secondsRemaining = Self.secondsPerQuestion
+        interviewDeadline = nil
+        interviewSecondsRemaining = Int(timeLimit)
 
-        addLog("SESSION START — \(questions.count) questions, \(Self.secondsPerQuestion)s each", at: date)
+        addLog(String(
+            format: "SESSION START — %d questions, %ds each, %.0fs interview limit",
+            questions.count, Self.secondsPerQuestion, timeLimit
+        ), at: date)
         QuestionLogger.roundStarted(questionCount: questions.count)
 
         guard countdown > 0 else {
@@ -97,6 +116,8 @@ final class QuestionSession {
         secondsRemaining = Self.secondsPerQuestion
         countdownValue = 0
         deadline = nil
+        interviewDeadline = nil
+        interviewSecondsRemaining = Int(timeLimit)
     }
 
     // MARK: - Questions
@@ -120,6 +141,16 @@ final class QuestionSession {
                 if shown != countdownValue { countdownValue = shown }
             }
             return
+        }
+
+        if let interviewDeadline, date >= interviewDeadline {
+            addLog(String(format: "INTERVIEW TIME LIMIT — %.0fs reached during question %d", timeLimit, index + 1), at: date)
+            end(reason: "time limit reached", at: date)
+            return
+        }
+        if let interviewDeadline {
+            let left = max(0, Int(ceil(interviewDeadline.timeIntervalSince(date))))
+            if left != interviewSecondsRemaining { interviewSecondsRemaining = left }
         }
 
         if remaining <= 0 {
@@ -188,6 +219,8 @@ final class QuestionSession {
         phase = .playing
         countdownValue = 0
         index = 0
+        interviewDeadline = date.addingTimeInterval(timeLimit)
+        interviewSecondsRemaining = Int(timeLimit)
         reveal(at: date)
     }
 
@@ -221,6 +254,8 @@ final class QuestionSession {
     private func end(reason: String, at date: Date) {
         phase = .finished
         deadline = nil
+        interviewDeadline = nil
+        interviewSecondsRemaining = 0
         secondsRemaining = 0
         countdownValue = 0
         sessionEndDate = date

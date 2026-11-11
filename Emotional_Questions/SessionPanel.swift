@@ -84,6 +84,8 @@ struct SessionPanel: View {
                             .font(.title3.weight(.semibold))
                             .foregroundStyle(.secondary)
                     }
+                    InterviewTimeLeft(seconds: session.interviewSecondsRemaining)
+                        .font(.title3.weight(.medium))
                 }
                 Spacer(minLength: 0)
             }

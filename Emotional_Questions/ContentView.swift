@@ -137,7 +137,7 @@ struct ContentView: View {
                     .font(.system(size: 32, weight: .medium, design: .serif))
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
-                Text("Answer out loud. You have twenty seconds for each one.")
+                Text("Answer out loud. You have twenty seconds for each one, and the interview ends after three minutes.")
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -147,6 +147,8 @@ struct ContentView: View {
                 stat(value: "\(session.questions.count)", caption: "Questions")
                 statDivider
                 stat(value: "20s", caption: "Each")
+                statDivider
+                stat(value: "3 min", caption: "Total")
                 statDivider
                 stat(value: "1–\(session.questions.count)", caption: "Difficulty")
             }
@@ -204,6 +206,8 @@ struct ContentView: View {
                         Text(question.tier.title)
                             .font(.subheadline.weight(.semibold))
                     }
+                    InterviewTimeLeft(seconds: session.interviewSecondsRemaining)
+                        .font(.subheadline.weight(.medium))
                 }
 
                 // In the interview room the question is spoken in the interviewer's
@@ -345,6 +349,25 @@ struct RecordingBadge: View {
         .background(.red.opacity(0.15), in: Capsule())
         .onAppear { pulse = true }
         .accessibilityLabel("Logging is on")
+    }
+}
+
+/// "2:45 left" for the whole interview; turns orange in the last 30 seconds.
+struct InterviewTimeLeft: View {
+    var seconds: Int
+
+    var body: some View {
+        let urgent = seconds <= 30
+        Label {
+            Text("\(seconds / 60):\(String(format: "%02d", seconds % 60)) left")
+                .monospacedDigit()
+                .contentTransition(.numericText(countsDown: true))
+                .animation(.snappy, value: seconds)
+        } icon: {
+            Image(systemName: "hourglass")
+        }
+        .foregroundStyle(urgent ? StageStyle.urgent : Color.secondary)
+        .accessibilityLabel("\(seconds / 60) minutes \(seconds % 60) seconds left in the interview")
     }
 }
 

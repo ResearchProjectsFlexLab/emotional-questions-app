@@ -120,6 +120,46 @@ struct Emotional_QuestionsTests {
         #expect(session.savedLogURL != nil)
     }
 
+    @Test func interviewStopsAtThreeMinutesEvenWithQuestionsLeft() throws {
+        let session = QuestionSession(logDirectory: try tempDirectory())
+        #expect(QuestionSession.interviewTimeLimit == 180)
+        #expect(session.questions.count * QuestionSession.secondsPerQuestion > 180)
+
+        session.start(at: start)                                   // 3s countdown first
+        let firstQuestion = start.addingTimeInterval(TimeInterval(QuestionSession.countdownSeconds))
+        // Tick like the app does, every 0.1s, until just before the limit.
+        var t = start
+        while t < firstQuestion.addingTimeInterval(179.9) {
+            t = t.addingTimeInterval(0.1)
+            session.refresh(at: t)
+        }
+        #expect(session.phase == .playing)
+        #expect(session.interviewSecondsRemaining == 1)
+
+        session.refresh(at: firstQuestion.addingTimeInterval(180))
+
+        #expect(session.phase == .finished)
+        #expect(session.entries.count < session.questions.count)
+        #expect(session.log.contains { $0.message.hasPrefix("INTERVIEW TIME LIMIT") })
+        #expect(session.log.last?.message.hasPrefix("SESSION STOP — time limit reached") == true)
+        #expect(session.savedLogURL != nil)
+    }
+
+    @Test func timeLimitCountsDownFromFirstQuestionNotStart() {
+        let session = QuestionSession(questions: sampleQuestions(), timeLimit: 30)
+        session.start(at: start, countdown: 3)
+        #expect(session.interviewSecondsRemaining == 30)
+
+        session.refresh(at: start.addingTimeInterval(3))           // first question appears
+        session.refresh(at: start.addingTimeInterval(13))
+        #expect(session.interviewSecondsRemaining == 20)
+
+        session.restart()   // no-op while running
+        session.stop(at: start.addingTimeInterval(14))
+        session.restart()
+        #expect(session.interviewSecondsRemaining == 30)
+    }
+
     @Test func finishingTheRoundSavesLogWithoutAnExtraQuestion() {
         let session = makeSession()
         session.start(at: start, countdown: 0)

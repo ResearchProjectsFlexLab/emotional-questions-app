@@ -76,6 +76,8 @@ struct ImmersiveView: View {
             session.refresh(at: date)
         }
         .onChange(of: session.index) { nod() }
+        // Speak each new line (greeting, every question, closing) as it appears in the bubble.
+        .onChange(of: bubbleKey, initial: true) { speakBubble() }
         .onChange(of: session.phase) { _, phase in
             if phase == .playing || phase == .finished { nod() }
             if phase == .finished { Task { await leaveRoom() } }
@@ -113,6 +115,14 @@ struct ImmersiveView: View {
         switch session.phase {
         case .playing: return "q\(session.index)"
         default:       return "\(session.phase)"
+        }
+    }
+
+    private func speakBubble() {
+        if let line = bubbleText {
+            appModel.interviewerVoice.say(line)
+        } else {
+            appModel.interviewerVoice.stop()
         }
     }
 

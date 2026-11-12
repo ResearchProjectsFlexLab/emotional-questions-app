@@ -50,6 +50,8 @@ struct ContentView: View {
         .onReceive(clock) { date in
             session.refresh(at: date)
         }
+        .onChange(of: appModel.immersiveSpaceState) { startRecoveryIfDue() }
+        .task { startRecoveryIfDue() }
         // The round can also end on its own (last question times out or Finish is pressed).
         .onChange(of: session.phase) { _, phase in
             if phase == .finished {
@@ -154,15 +156,76 @@ struct ContentView: View {
             }
             .padding(.vertical, 6)
 
-            Button(action: startSession) {
-                Label("Start", systemImage: "play.fill")
-                    .font(.title.weight(.semibold))
-                    .frame(minWidth: 300, minHeight: 80)
+            VStack(spacing: 12) {
+                Button(action: { openRest(.baseline) }) {
+                    Label("Start baseline", systemImage: "moon.stars.fill")
+                        .font(.title.weight(.semibold))
+                        .frame(minWidth: 300, minHeight: 80)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.teal)
+                .controlSize(.extraLarge)
+                .disabled(!canOpenRest)
+
+                Text("1 min rest  ·  3 min interview  ·  1 min rest")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(.green)
-            .controlSize(.extraLarge)
         }
+    }
+
+    // MARK: - Baseline and recovery
+
+    private var canOpenRest: Bool {
+        appModel.immersiveSpaceState == .closed && !appModel.restSpaceOpen
+    }
+
+    /// Opens the moonlit lake for a rest. The baseline shows its instructions card with a Start button;
+    /// the recovery starts straight away.
+    private func openRest(_ kind: RestSession.Kind) {
+        guard canOpenRest else { return }
+        appModel.rest.prepare(kind)
+        Task {
+            if case .opened = await openImmersiveSpace(id: appModel.restSpaceID) {
+                // Nothing should float between the participant and the scene.
+                appModel.mainWindowHidden = true
+                dismissWindow(id: appModel.mainWindowID)
+            }
+        }
+    }
+
+    private var recoveryDone: Bool {
+        appModel.rest.kind == .recovery && appModel.rest.phase == .done
+    }
+
+    @ViewBuilder
+    private var recoveryStep: some View {
+        if recoveryDone {
+            VStack(spacing: 6) {
+                Label("Recovery complete", systemImage: "moon.stars.fill")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(.teal)
+                if let url = appModel.rest.savedLogURL {
+                    Text(url.lastPathComponent)
+                        .font(.callout.monospaced())
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    /// The interview is over and its room has closed: go straight into the recovery minute,
+    /// as the Follow the Snake app does after its game.
+    private var recoveryIsDue: Bool {
+        session.phase == .finished
+            && appModel.rest.kind == .baseline && appModel.rest.phase == .done
+            && appModel.immersiveSpaceState == .closed
+    }
+
+    private func startRecoveryIfDue() {
+        guard recoveryIsDue else { return }
+        openRest(.recovery)
     }
 
     private var countdownStage: some View {
@@ -264,7 +327,12 @@ struct ContentView: View {
 
             saveBanner
 
-            Button(action: { session.restart() }) {
+            recoveryStep
+
+            Button(action: {
+                session.restart()
+                appModel.rest.reset()
+            }) {
                 Label("New round", systemImage: "arrow.counterclockwise")
                     .font(.title3.weight(.semibold))
                     .frame(minWidth: 220, minHeight: 56)

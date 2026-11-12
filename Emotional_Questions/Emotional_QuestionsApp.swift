@@ -41,5 +41,12 @@ struct Emotional_QuestionsApp: App {
                 }
         }
         .immersionStyle(selection: .constant(.full), in: .full)
+
+        // The moonlit lake for the baseline and recovery minutes.
+        ImmersiveSpace(id: appModel.restSpaceID) {
+            RestImmersiveView()
+                .environment(appModel)
+        }
+        .immersionStyle(selection: .constant(.full), in: .full)
     }
 }
